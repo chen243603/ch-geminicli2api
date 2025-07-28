@@ -4,3 +4,7 @@ requests
 python-dotenv
 google-auth-oauthlib
 pydantic
+pytest
+httpx
+pytest-mock
+pytest-asyncio

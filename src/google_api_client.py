@@ -10,7 +10,7 @@ from fastapi import Response
 from fastapi.responses import StreamingResponse
 from google.auth.transport.requests import Request as GoogleAuthRequest
 
-from .utils import get_user_agent
+from .utils import get_user_agent, retry_api_call
 from .config import (
     CODE_ASSIST_ENDPOINT,
     DEFAULT_SAFETY_SETTINGS,
@@ -30,6 +30,11 @@ class GoogleApiClient:
         The client is now stateless. Initialization is handled by the dependency injection system.
         """
         pass
+
+    @retry_api_call()
+    def _make_request(self, url, data, headers, stream=False):
+        """Makes the actual HTTP request. This method is decorated with a retry mechanism."""
+        return requests.post(url, data=data, headers=headers, stream=stream)
 
     def send_request(self, payload: dict, creds, project_id, is_streaming: bool = False) -> Response:
         """
@@ -81,16 +86,15 @@ class GoogleApiClient:
 
         # Send the request
         try:
+            resp = self._make_request(target_url, data=final_post_data, headers=request_headers, stream=is_streaming)
             if is_streaming:
-                resp = requests.post(target_url, data=final_post_data, headers=request_headers, stream=True)
                 return self._handle_streaming_response(resp)
             else:
-                resp = requests.post(target_url, data=final_post_data, headers=request_headers)
                 return self._handle_non_streaming_response(resp)
         except requests.exceptions.RequestException as e:
-            logging.error(f"Request to Google API failed: {str(e)}")
+            logging.error(f"Request to Google API failed after retries: {str(e)}")
             return Response(
-                content=json.dumps({"error": {"message": f"Request failed: {str(e)}"}}),
+                content=json.dumps({"error": {"message": f"Request failed after retries: {str(e)}"}}),
                 status_code=500,
                 media_type="application/json"
             )

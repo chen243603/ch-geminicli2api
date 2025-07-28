@@ -39,3 +39,26 @@ def get_client_metadata(creds, project_id=None):
         "pluginType": "GEMINI",
         "duetProject": project_id,
     }
+
+import time
+import requests
+from functools import wraps
+
+def retry_api_call(retries=3, delay=1):
+    """
+    A decorator to retry a function call if it raises a requests.exceptions.RequestException.
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(retries):
+                try:
+                    return func(*args, **kwargs)
+                except requests.exceptions.RequestException as e:
+                    if attempt < retries - 1:
+                        time.sleep(delay)
+                        continue
+                    else:
+                        raise
+        return wrapper
+    return decorator

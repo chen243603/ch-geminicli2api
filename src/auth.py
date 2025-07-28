@@ -388,12 +388,38 @@ def onboard_user(creds, project_id, file_path):
 
 
 def get_current_session():
-    """A FastAPI dependency that provides a fresh, rotated credential session for each request."""
-    creds, project_id, file_path = get_credentials()
-    if not creds:
-        raise HTTPException(status_code=503, detail="No available credentials at the moment.")
-    
-    # Ensure user is onboarded for this specific credential, only runs once per credential.
-    onboard_user(creds, project_id, file_path)
-    
-    return creds, project_id
+    """
+    A FastAPI dependency that provides a fresh, rotated credential session for each request.
+    It will attempt to get a working credential up to 3 times before failing.
+    """
+    last_exception = None
+    for attempt in range(3):
+        try:
+            creds, project_id, file_path = get_credentials()
+            if not creds:
+                # This counts as a failed attempt if no credential could be retrieved
+                last_exception = HTTPException(status_code=503, detail=f"Attempt {attempt + 1}/3: No available credentials.")
+                continue
+
+            # Ensure user is onboarded for this specific credential.
+            # This might raise an exception, which is a failed attempt.
+            onboard_user(creds, project_id, file_path)
+            
+            # If onboard_user succeeds, we have a working credential.
+            return creds, project_id
+
+        except Exception as e:
+            # Capture the exception and try the next credential.
+            last_exception = e
+            continue # Move to the next attempt
+
+    # If all attempts fail, raise the last known exception.
+    if isinstance(last_exception, HTTPException):
+        # Re-raise the specific HTTPException from get_credentials
+        raise last_exception
+    elif last_exception:
+        # Raise a generic 503 error with the details of the last onboarding failure.
+        raise HTTPException(status_code=503, detail=f"All credential attempts failed. Last error: {str(last_exception)}")
+    else:
+        # This case should ideally not be reached, but as a fallback.
+        raise HTTPException(status_code=503, detail="Failed to obtain a valid credential after 3 attempts.")
