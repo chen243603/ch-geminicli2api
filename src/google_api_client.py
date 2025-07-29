@@ -263,7 +263,7 @@ def get_google_api_client():
     """
     global google_api_client
     if google_api_client is None:
-        # First request: Initializing Google API client...
+        logging.info("First request: Initializing Google API client...")
         google_api_client = GoogleApiClient()
     return google_api_client
 

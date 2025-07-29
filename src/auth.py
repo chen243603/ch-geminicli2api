@@ -49,10 +49,12 @@ class CredentialManager:
 
     def _load_credentials(self):
         if not os.path.isdir(GEMINI_CREDENTIALS_PATH):
+            logging.warning("GEMINI_CREDENTIALS_PATH not found or is not a directory.")
             return
 
         json_files = glob.glob(os.path.join(GEMINI_CREDENTIALS_PATH, '*.json'))
         if not json_files:
+            logging.warning(f"No JSON files found in {GEMINI_CREDENTIALS_PATH}.")
             return
 
         for file_path in json_files:
@@ -73,16 +75,17 @@ class CredentialManager:
                     "last_failure": None
                 })
             except Exception as e:
-                pass
+                logging.error(f"Failed to load credential from {file_path}: {e}")
         
         if self.credentials_pool:
-            pass
+            logging.info(f"Successfully loaded {len(self.credentials_pool)} credentials.")
         else:
-            pass
+            logging.warning("Credential pool is empty after loading.")
 
 
     def get_next_credential(self):
         if not self.credentials_pool:
+            logging.warning("Credential pool is empty, cannot get next credential.")
             return None, None, None
 
         with self.rotation_lock:
@@ -106,19 +109,21 @@ class CredentialManager:
                         continue
 
                     if creds.expired and creds.refresh_token:
-                        # Credential expired, attempting refresh...
+                        logging.info(f"Credential for {project_id} expired, attempting refresh...")
                         creds.refresh(GoogleAuthRequest())
-                        # Credential refreshed successfully.
+                        logging.info(f"Credential for {project_id} refreshed successfully.")
                         cred_info["last_failure"] = None
                     
-                    # Using credential for project: '{project_id}' (from {file_path})
+                    logging.info(f"Using credential for project: '{project_id}' (from {file_path})")
                     return creds, project_id, file_path
                 except Exception as e:
-                    # Failed to refresh credential
+                    file_path = cred_info.get("file_path", "unknown_file")
+                    project_id = cred_info.get("project_id", "unknown_project")
+                    logging.warning(f"Failed to refresh credential for {project_id} from {file_path}: {e}")
                     cred_info["last_failure"] = datetime.now()
                     continue
         
-        # All credentials in the pool are currently in cool-down.
+        logging.warning("All credentials in the pool are currently in cool-down.")
         return None, None, None
 
 # --- Global State ---
@@ -251,7 +256,7 @@ def get_credentials():
     if os.path.isdir(GEMINI_CREDENTIALS_PATH):
         # Lazily load credentials if the pool is empty
         if not manager.credentials_pool:
-            # Credential pool directory exists. Attempting to load credentials...
+            logging.info("Credential pool directory exists. Attempting to load credentials...")
             manager._load_credentials()
 
         if manager.credentials_pool:
@@ -260,11 +265,11 @@ def get_credentials():
                 return next_cred, project_id, file_path
             else:
                 # Pool exists but all are in cooldown, this is a valid final state.
-                # All credentials in the pool are currently in cool-down.
+                logging.warning("All credentials in the pool are currently in cool-down.")
                 return None, None, None
         else:
             # Directory exists but loading resulted in an empty pool. This is an error.
-            # Credential directory exists but contains no valid credentials.
+            logging.error("Credential directory exists but contains no valid credentials.")
             return None, None, None
 
     # Fallback 1: Environment Variable (only if credentials directory does NOT exist)
@@ -276,11 +281,10 @@ def get_credentials():
             project_id = info.get("project_id", "unknown_env")
             if creds.expired and creds.refresh_token:
                 creds.refresh(GoogleAuthRequest())
-            # Using credential from environment variable
+            logging.info("Using credential from environment variable.")
             return creds, project_id, "environment"
         except Exception as e:
-            # Failed to load credentials from environment variable
-            pass
+            logging.error(f"Failed to load credentials from environment variable: {e}")
 
     # Fallback 2: Single Credential File (only if directory and env var are not used)
     if os.path.exists(CREDENTIAL_FILE):
@@ -291,13 +295,12 @@ def get_credentials():
             project_id = info.get("project_id", "unknown_file")
             if creds.expired and creds.refresh_token:
                 creds.refresh(GoogleAuthRequest())
-            # Using credential from single file
+            logging.info("Using credential from single file.")
             return creds, project_id, "single_file"
         except Exception as e:
-            # Failed to load credentials from single file
-            pass
+            logging.error(f"Failed to load credentials from {CREDENTIAL_FILE}: {e}")
 
-    # No valid credentials found.
+    logging.critical("No valid credentials found after checking all methods.")
     return None, None, None
 
 def onboard_user(creds, project_id, file_path):

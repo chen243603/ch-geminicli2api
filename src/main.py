@@ -2,19 +2,20 @@ import logging
 import os
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from .gemini_routes import router as gemini_router
-from .openai_routes import router as openai_router
-from .google_api_client import get_google_api_client
 
 # Load environment variables from .env file
 try:
     from dotenv import load_dotenv
     load_dotenv()
-    pass
+    logging.info("Environment variables loaded from .env file")
 except ImportError:
-    pass
+    logging.warning(".env file not found, but that's okay.")
 except Exception as e:
-    pass
+    logging.warning(f"Error loading .env file: {e}")
+
+from .gemini_routes import router as gemini_router
+from .openai_routes import router as openai_router
+from .google_api_client import get_google_api_client
 
 app = FastAPI()
 
@@ -24,7 +25,16 @@ async def startup_event():
     Application startup event.
     Initializes the Google API client.
     """
+    # Configure logging
+    log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(level=log_level)
+    logging.getLogger("uvicorn.access").setLevel(log_level)
+    logging.getLogger("uvicorn.error").setLevel(log_level)
+    logging.getLogger().setLevel(log_level)
+
     get_google_api_client()
+    logging.info("Google API client initialized.")
+    logging.info(f"Uvicorn and root logger levels set to {log_level}")
 
 # Add CORS middleware for preflight requests
 app.add_middleware(
