@@ -36,6 +36,10 @@ A FastAPI-based proxy server that converts the Gemini CLI tool into both OpenAI-
 - `GOOGLE_CLOUD_PROJECT`: Google Cloud project ID
 - `GEMINI_PROJECT_ID`: Alternative project ID variable
 
+### Pseudo Streaming (Optional)
+- `PSEUDO_STREAMING_ENABLED`: Enable pseudo streaming mode (default: false)
+- `PSEUDO_STREAMING_HEARTBEAT_INTERVAL`: Heartbeat interval in seconds (default: 5)
+
 ### Example Credentials JSON
 ```json
 {

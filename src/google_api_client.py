@@ -6,6 +6,7 @@ import json
 import logging
 import requests
 import asyncio
+import time
 from fastapi import Response
 from fastapi.responses import StreamingResponse
 from google.auth.transport.requests import Request as GoogleAuthRequest
@@ -17,7 +18,9 @@ from .config import (
     get_base_model_name,
     is_search_model,
     get_thinking_budget,
-    should_include_thoughts
+    should_include_thoughts,
+    PSEUDO_STREAMING_ENABLED,
+    PSEUDO_STREAMING_HEARTBEAT_INTERVAL
 )
 
 class GoogleApiClient:
@@ -31,9 +34,9 @@ class GoogleApiClient:
         """
         pass
 
-    @retry_api_call()
+    @retry_api_call(retries=3, delay=1)
     def _make_request(self, url, data, headers, stream=False):
-        """Makes the actual HTTP request. This method is decorated with a retry mechanism."""
+        """Makes the actual HTTP request with retry mechanism."""
         return requests.post(url, data=data, headers=headers, stream=stream)
 
     def send_request(self, payload: dict, creds, project_id, is_streaming: bool = False) -> Response:
@@ -86,10 +89,11 @@ class GoogleApiClient:
 
         # Send the request
         try:
-            resp = self._make_request(target_url, data=final_post_data, headers=request_headers, stream=is_streaming)
             if is_streaming:
+                resp = self._make_request(target_url, final_post_data, request_headers, stream=True)
                 return self._handle_streaming_response(resp)
             else:
+                resp = self._make_request(target_url, final_post_data, request_headers)
                 return self._handle_non_streaming_response(resp)
         except requests.exceptions.RequestException as e:
             logging.error(f"Request to Google API failed after retries: {str(e)}")
@@ -149,28 +153,64 @@ class GoogleApiClient:
         async def stream_generator():
             try:
                 with resp:
-                    for chunk in resp.iter_lines():
-                        if chunk:
-                            if not isinstance(chunk, str):
-                                chunk = chunk.decode('utf-8', "ignore")
-                                
-                            if chunk.startswith('data: '):
-                                chunk = chunk[len('data: '):]
-                                
-                                try:
-                                    obj = json.loads(chunk)
+                    # If pseudo streaming is enabled, we convert streaming to non-streaming
+                    # with periodic heartbeat messages
+                    if PSEUDO_STREAMING_ENABLED:
+                        # Collect all chunks
+                        chunks = []
+                        for chunk in resp.iter_lines():
+                            if chunk:
+                                if not isinstance(chunk, str):
+                                    chunk = chunk.decode('utf-8', "ignore")
                                     
-                                    if "response" in obj:
-                                        response_chunk = obj["response"]
-                                        response_json = json.dumps(response_chunk, separators=(',', ':'))
-                                        response_line = f"data: {response_json}\n\n"
-                                        yield response_line.encode('utf-8', "ignore")
-                                        await asyncio.sleep(0)
-                                    else:
-                                        obj_json = json.dumps(obj, separators=(',', ':'))
-                                        yield f"data: {obj_json}\n\n".encode('utf-8', "ignore")
-                                except json.JSONDecodeError:
-                                    continue
+                                if chunk.startswith('data: '):
+                                    chunk = chunk[len('data: '):]
+                                    
+                                    try:
+                                        obj = json.loads(chunk)
+                                        if "response" in obj:
+                                            response_chunk = obj["response"]
+                                            chunks.append(response_chunk)
+                                        else:
+                                            chunks.append(obj)
+                                    except json.JSONDecodeError:
+                                        continue
+                        
+                        # Send all chunks with periodic heartbeats
+                        for i, chunk in enumerate(chunks):
+                            chunk_json = json.dumps(chunk, separators=(',', ':'))
+                            yield f"data: {chunk_json}\n\n".encode('utf-8')
+                            
+                            # Send heartbeat every interval
+                            if (i + 1) % PSEUDO_STREAMING_HEARTBEAT_INTERVAL == 0:
+                                yield f"data: {{}}\n\n".encode('utf-8')
+                                
+                            # Add a small delay to simulate streaming
+                            await asyncio.sleep(0.01)
+                    else:
+                        # Standard streaming behavior
+                        for chunk in resp.iter_lines():
+                            if chunk:
+                                if not isinstance(chunk, str):
+                                    chunk = chunk.decode('utf-8', "ignore")
+                                    
+                                if chunk.startswith('data: '):
+                                    chunk = chunk[len('data: '):]
+                                    
+                                    try:
+                                        obj = json.loads(chunk)
+                                        
+                                        if "response" in obj:
+                                            response_chunk = obj["response"]
+                                            response_json = json.dumps(response_chunk, separators=(',', ':'))
+                                            response_line = f"data: {response_json}\n\n"
+                                            yield response_line.encode('utf-8', "ignore")
+                                            await asyncio.sleep(0)
+                                        else:
+                                            obj_json = json.dumps(obj, separators=(',', ':'))
+                                            yield f"data: {obj_json}\n\n".encode('utf-8', "ignore")
+                                    except json.JSONDecodeError:
+                                        continue
                     
             except requests.exceptions.RequestException as e:
                 logging.error(f"Streaming request failed: {str(e)}")
