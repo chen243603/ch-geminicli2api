@@ -99,25 +99,11 @@ async def openai_chat_completions(
                                     return
                                 
                                 # Transform to OpenAI format
-                                candidates = gemini_chunk.get('candidates', [])
-                                if candidates and candidates[0].get('content', {}).get('parts'):
-                                    first_text = candidates[0]['content']['parts'][0].get('text', '')[:50]
-                                    print(f"[DEBUG] Converting chunk to OpenAI format: {first_text}...")
-                                else:
-                                    print(f"[DEBUG] Converting chunk with no text content")
-                                
                                 openai_chunk = gemini_stream_chunk_to_openai(
                                     gemini_chunk,
                                     request.model,
                                     response_id
                                 )
-                                
-                                choices = openai_chunk.get('choices', [])
-                                if choices and choices[0].get('delta', {}).get('content'):
-                                    content_preview = choices[0]['delta']['content'][:50]
-                                    print(f"[DEBUG] OpenAI chunk content: {content_preview}...")
-                                else:
-                                    print(f"[DEBUG] OpenAI chunk has no content")
                                 
                                 # Send as OpenAI streaming format
                                 yield f"data: {json.dumps(openai_chunk, ensure_ascii=False)}\n\n"
@@ -126,7 +112,6 @@ async def openai_chat_completions(
                             except (json.JSONDecodeError, KeyError, UnicodeDecodeError) as e:
                                 logging.warning(f"Failed to parse streaming chunk: {str(e)}")
                                 logging.warning(f"Problematic chunk content: {repr(chunk[:200])}")
-                                print(f"[DEBUG] OpenAI route failed to parse chunk: {repr(chunk[:100])}")
                                 continue
                     
                     # Send the final [DONE] marker

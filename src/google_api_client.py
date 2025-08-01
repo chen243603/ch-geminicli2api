@@ -93,17 +93,14 @@ class GoogleApiClient:
         # Send the request
         try:
             if is_streaming:
-                print(f"[DEBUG] Streaming request - PSEUDO_STREAMING_ENABLED: {PSEUDO_STREAMING_ENABLED}")
                 logging.info(f"Streaming request - PSEUDO_STREAMING_ENABLED: {PSEUDO_STREAMING_ENABLED}")
                 if PSEUDO_STREAMING_ENABLED:
                     # In pseudo streaming mode, always use non-streaming request
-                    print("[DEBUG] Using pseudo streaming mode - sending non-streaming request")
                     logging.info("Using pseudo streaming mode - sending non-streaming request")
                     resp = self._make_request(target_url, final_post_data, request_headers, stream=False)
                     return self._handle_pseudo_streaming_response(resp)
                 else:
                     # Normal streaming mode
-                    print("[DEBUG] Using normal streaming mode - sending streaming request")
                     logging.info("Using normal streaming mode - sending streaming request")
                     resp = self._make_request(target_url, final_post_data, request_headers, stream=True)
                     return self._handle_streaming_response(resp)
@@ -262,22 +259,13 @@ class GoogleApiClient:
                     yield f'data: {json.dumps(error_response, ensure_ascii=False)}\n\n'.encode('utf-8')
                     return
 
-                # Log the raw response for debugging
-                print(f"[DEBUG] Response encoding: {resp.encoding}")
-                print(f"[DEBUG] Response content type: {resp.headers.get('content-type', 'unknown')}")
-                
                 # Force UTF-8 encoding for proper Chinese text handling
                 # Google API returns UTF-8 content but may have wrong encoding header
                 if resp.encoding != 'utf-8':
-                    print(f"[DEBUG] Forcing UTF-8 encoding (was: {resp.encoding})")
                     # Get raw bytes and decode as UTF-8
                     raw_response = resp.content.decode('utf-8').strip()
                 else:
                     raw_response = resp.text.strip()
-                
-                print(f"[DEBUG] Pseudo streaming raw response length: {len(raw_response)}")
-                print(f"[DEBUG] Raw response preview: {raw_response[:200]}...")
-                logging.info(f"Pseudo streaming raw response: {raw_response[:500]}...")
                 
                 # Send heartbeats to keep connection alive during processing
                 heartbeat_count = 0
@@ -291,19 +279,14 @@ class GoogleApiClient:
                 # Parse the complete non-streaming response
                 try:
                     parsed_response = json.loads(raw_response)
-                    print(f"[DEBUG] Parsed complete response successfully")
-                    print(f"[DEBUG] Response keys: {list(parsed_response.keys())}")
                     
                     # Check if response has the expected structure
                     if "response" in parsed_response:
                         actual_response = parsed_response["response"]
-                        print(f"[DEBUG] Found 'response' field, keys: {list(actual_response.keys())}")
                     else:
                         actual_response = parsed_response
-                        print(f"[DEBUG] Using full response as-is")
                     
                     # Convert complete response to streaming chunks for compatibility
-                    print(f"[DEBUG] Converting complete response to streaming chunks")
                     
                     # Extract content for chunking
                     if "candidates" in actual_response:
@@ -337,7 +320,6 @@ class GoogleApiClient:
                                                 chunk_response[key] = actual_response[key]
                                     
                                     chunk_json = json.dumps(chunk_response, separators=(',', ':'), ensure_ascii=False)
-                                    print(f"[DEBUG] Sending chunk {i+1}/{len(parts)}: {len(chunk_json)} chars")
                                     yield f"data: {chunk_json}\n\n".encode('utf-8')
                                     
                                     # Small delay between chunks
@@ -345,11 +327,9 @@ class GoogleApiClient:
                     else:
                         # Fallback: send as single chunk if no candidates
                         response_json = json.dumps(actual_response, separators=(',', ':'), ensure_ascii=False)
-                        print(f"[DEBUG] Sending single chunk: {len(response_json)} chars")
                         yield f"data: {response_json}\n\n".encode('utf-8')
                     
                 except json.JSONDecodeError as e:
-                    print(f"[DEBUG] Failed to parse as single JSON, falling back to line-by-line parsing")
                     # Fallback: if still receiving streaming format, handle it
                     lines = raw_response.split('\n')
                     combined_text = ""
@@ -406,7 +386,6 @@ class GoogleApiClient:
                     
                     # Build the final combined response
                     if combined_text or combined_thoughts:
-                        print(f"[DEBUG] Fallback: Combined text length: {len(combined_text)}, thoughts length: {len(combined_thoughts)}")
                         
                         parts = []
                         if combined_thoughts:
