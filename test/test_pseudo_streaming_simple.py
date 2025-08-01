@@ -23,9 +23,12 @@ class TestPseudoStreamingSimple:
             # 模拟完整响应（可能包含额外数据）
             mock_response = MagicMock()
             mock_response.status_code = 200
-            mock_response.text = '''{"response": {"candidates": [{"content": {"parts": [{"text": "Hello world"}]}}]}}
+            mock_response.encoding = 'utf-8'
+            response_text = '''{"response": {"candidates": [{"content": {"parts": [{"text": "Hello world"}]}}]}}
 extra data that would cause parsing issues
 {"another": "object"}'''
+            mock_response.text = response_text
+            mock_response.content = response_text.encode('utf-8')
             mock_request.return_value = mock_response
             
             # 模拟请求参数
@@ -73,7 +76,10 @@ extra data that would cause parsing issues
             # 模拟带data:前缀的响应
             mock_response = MagicMock() 
             mock_response.status_code = 200
-            mock_response.text = 'data: {"response": {"candidates": [{"content": {"parts": [{"text": "Test with data prefix"}]}}]}}'
+            mock_response.encoding = 'utf-8'
+            response_text = 'data: {"response": {"candidates": [{"content": {"parts": [{"text": "Test with data prefix"}]}}]}}'
+            mock_response.text = response_text
+            mock_response.content = response_text.encode('utf-8')
             mock_request.return_value = mock_response
             
             # 模拟请求参数
@@ -105,7 +111,10 @@ extra data that would cause parsing issues
             
             mock_response = MagicMock()
             mock_response.status_code = 200
-            mock_response.text = '{"test": "response"}'
+            mock_response.encoding = 'utf-8'
+            response_text = '{"test": "response"}'
+            mock_response.text = response_text
+            mock_response.content = response_text.encode('utf-8')
             mock_request.return_value = mock_response
             
             # 发送流式请求

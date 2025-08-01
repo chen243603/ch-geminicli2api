@@ -26,9 +26,12 @@ class TestPseudoStreamingDebug:
             # 模拟包含额外数据的响应
             mock_response = MagicMock()
             mock_response.status_code = 200
-            mock_response.text = '''{"response": {"candidates": [{"content": {"parts": [{"text": "Debug test response"}]}}]}}
+            mock_response.encoding = 'utf-8'
+            response_text = '''{"response": {"candidates": [{"content": {"parts": [{"text": "Debug test response"}]}}]}}
 extra data line
 {"another": "json", "object": "here"}'''
+            mock_response.text = response_text
+            mock_response.content = response_text.encode('utf-8')
             mock_request.return_value = mock_response
             
             # 模拟请求参数
@@ -68,9 +71,12 @@ extra data line
             # 模拟完全无法解析的响应
             mock_response = MagicMock()
             mock_response.status_code = 200
-            mock_response.text = '''invalid json content here
+            mock_response.encoding = 'utf-8'
+            response_text = '''invalid json content here
 no valid json at all
 just some random text'''
+            mock_response.text = response_text
+            mock_response.content = response_text.encode('utf-8')
             mock_request.return_value = mock_response
             
             # 模拟请求参数

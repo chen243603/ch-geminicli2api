@@ -33,7 +33,10 @@ class TestPseudoStreamingEncoding:
             }
             mock_response = MagicMock()
             mock_response.status_code = 200
-            mock_response.text = f"data: {json.dumps(response_data, ensure_ascii=False)}"
+            mock_response.encoding = 'utf-8'
+            response_text = f"data: {json.dumps(response_data, ensure_ascii=False)}"
+            mock_response.text = response_text
+            mock_response.content = response_text.encode('utf-8')
             mock_request.return_value = mock_response
             
             # 模拟请求参数
@@ -105,7 +108,10 @@ class TestPseudoStreamingEncoding:
             
             mock_response = MagicMock()
             mock_response.status_code = 200
-            mock_response.text = f"data: {json.dumps(thought_data, ensure_ascii=False)}\n\ndata: {json.dumps(response_data, ensure_ascii=False)}"
+            mock_response.encoding = 'utf-8'
+            response_text = f"data: {json.dumps(thought_data, ensure_ascii=False)}\n\ndata: {json.dumps(response_data, ensure_ascii=False)}"
+            mock_response.text = response_text
+            mock_response.content = response_text.encode('utf-8')
             mock_request.return_value = mock_response
             
             # 模拟请求参数

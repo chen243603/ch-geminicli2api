@@ -45,6 +45,10 @@ class TestPseudoStreamingFixed:
             
             mock_response = MagicMock()
             mock_response.status_code = 200
+            mock_response.encoding = 'utf-8'
+            response_text = json.dumps({"candidates": [{"content": {"parts": [{"text": "test"}]}}]})
+            mock_response.text = response_text
+            mock_response.content = response_text.encode('utf-8')
             mock_response.json.return_value = {"candidates": [{"content": {"parts": [{"text": "test"}]}}]}
             mock_request.return_value = mock_response
             
@@ -71,7 +75,10 @@ class TestPseudoStreamingFixed:
             
             mock_response = MagicMock()
             mock_response.status_code = 200
-            mock_response.text = json.dumps({"response": mock_long_response})
+            mock_response.encoding = 'utf-8'
+            response_text = json.dumps({"response": mock_long_response})
+            mock_response.text = response_text
+            mock_response.content = response_text.encode('utf-8')
             mock_request.return_value = mock_response
             
             # 模拟请求参数
@@ -113,6 +120,10 @@ class TestPseudoStreamingFixed:
             
             mock_response = MagicMock()
             mock_response.status_code = 200
+            mock_response.encoding = 'utf-8'
+            response_text = json.dumps(mock_non_streaming_response)
+            mock_response.text = response_text
+            mock_response.content = response_text.encode('utf-8')
             mock_response.json.return_value = mock_non_streaming_response
             mock_request.return_value = mock_response
             
@@ -163,6 +174,10 @@ class TestPseudoStreamingFixed:
             
             mock_response = MagicMock()
             mock_response.status_code = 200
+            mock_response.encoding = 'utf-8'
+            response_text = json.dumps(long_response)
+            mock_response.text = response_text
+            mock_response.content = response_text.encode('utf-8')
             mock_response.json.return_value = long_response
             mock_request.return_value = mock_response
             
