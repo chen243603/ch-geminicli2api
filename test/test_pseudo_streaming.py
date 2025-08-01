@@ -68,7 +68,7 @@ def test_heartbeat_interval_default():
     from src.config import PSEUDO_STREAMING_HEARTBEAT_INTERVAL
     
     # Check default value
-    assert PSEUDO_STREAMING_HEARTBEAT_INTERVAL == 5
+    assert PSEUDO_STREAMING_HEARTBEAT_INTERVAL == 2.0
     
     # Test custom value
     original_value = os.environ.get("PSEUDO_STREAMING_HEARTBEAT_INTERVAL")

@@ -38,7 +38,13 @@ A FastAPI-based proxy server that converts the Gemini CLI tool into both OpenAI-
 
 ### Pseudo Streaming (Optional)
 - `PSEUDO_STREAMING_ENABLED`: Enable pseudo streaming mode (default: false)
-- `PSEUDO_STREAMING_HEARTBEAT_INTERVAL`: Heartbeat interval in seconds (default: 5)
+- `PSEUDO_STREAMING_HEARTBEAT_INTERVAL`: Time interval in seconds between heartbeat packets (default: 2.0)
+
+When pseudo streaming is enabled, the server will:
+1. Send non-streaming requests to the upstream Gemini API
+2. Send a few heartbeat packets (`data: {}\n\n`) with timing delays to keep the connection alive
+3. Send the complete response as-is without JSON parsing, avoiding parsing errors with malformed responses
+4. This mode is useful for maintaining streaming connections while avoiding complex response parsing issues
 
 ### Example Credentials JSON
 ```json
