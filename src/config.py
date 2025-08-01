@@ -31,16 +31,10 @@ CREDENTIAL_FILE = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", str(PROJECT_ROOT /
 # Authentication
 GEMINI_AUTH_PASSWORD = os.getenv("GEMINI_AUTH_PASSWORD") or "123456"
 
-# Pseudo Streaming Configuration
-PSEUDO_STREAMING_ENABLED = os.getenv("PSEUDO_STREAMING_ENABLED", "false").lower() == "true"
-PSEUDO_STREAMING_HEARTBEAT_INTERVAL = float(os.getenv("PSEUDO_STREAMING_HEARTBEAT_INTERVAL", "5.0"))  # seconds between heartbeats
-PSEUDO_STREAMING_MAX_HEARTBEATS = int(os.getenv("PSEUDO_STREAMING_MAX_HEARTBEATS", "50"))  # maximum number of heartbeats to send
+# Non-streaming Keepalive Configuration (Hajimi style)
+NONSTREAM_KEEPALIVE_ENABLED = os.getenv("NONSTREAM_KEEPALIVE_ENABLED", "false").lower() == "true"
+NONSTREAM_KEEPALIVE_INTERVAL = float(os.getenv("NONSTREAM_KEEPALIVE_INTERVAL", "5.0"))  # seconds between keepalive messages
 
-# Debug logging for pseudo streaming config
-import logging
-logging.info(f"Config loaded - PSEUDO_STREAMING_ENABLED: {PSEUDO_STREAMING_ENABLED} (from env: {os.getenv('PSEUDO_STREAMING_ENABLED', 'not set')})")
-logging.info(f"PSEUDO_STREAMING_HEARTBEAT_INTERVAL: {PSEUDO_STREAMING_HEARTBEAT_INTERVAL}s (from env: {os.getenv('PSEUDO_STREAMING_HEARTBEAT_INTERVAL', 'not set')})")
-logging.info(f"PSEUDO_STREAMING_MAX_HEARTBEATS: {PSEUDO_STREAMING_MAX_HEARTBEATS} (from env: {os.getenv('PSEUDO_STREAMING_MAX_HEARTBEATS', 'not set')})")
 
 # Default Safety Settings for Google API
 DEFAULT_SAFETY_SETTINGS = [

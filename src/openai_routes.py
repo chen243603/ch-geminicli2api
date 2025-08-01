@@ -38,8 +38,6 @@ async def openai_chat_completions(
     google_api_client = get_google_api_client()
     
     try:
-        logging.info(f"OpenAI chat completion request: model={request.model}, stream={request.stream}")
-        
         # Transform OpenAI request to Gemini format
         gemini_request_data = openai_request_to_gemini(request)
         
@@ -212,14 +210,43 @@ async def openai_chat_completions(
                 )
             
             try:
-                # Parse Gemini response and transform to OpenAI format
-                gemini_response = json.loads(response.body)
+                # Check if this is a keepalive StreamingResponse - create a wrapper that converts to OpenAI format
+                if isinstance(response, StreamingResponse):
+                    from .config import NONSTREAM_KEEPALIVE_ENABLED
+                    if NONSTREAM_KEEPALIVE_ENABLED:
+                        async def openai_keepalive_wrapper():
+                            gemini_response = None
+                            async for chunk in response.body_iterator:
+                                if chunk == "\n":
+                                    yield "\n"
+                                else:
+                                    try:
+                                        gemini_response = json.loads(chunk) if isinstance(chunk, str) else json.loads(chunk.decode('utf-8'))
+                                        openai_response = gemini_response_to_openai(gemini_response, request.model)
+                                        yield json.dumps(openai_response, ensure_ascii=False)
+                                    except (json.JSONDecodeError, Exception) as e:
+                                        logging.error(f"Failed to convert response: {str(e)}")
+                                        yield chunk
+                        
+                        return StreamingResponse(
+                            openai_keepalive_wrapper(),
+                            media_type="application/json",
+                            headers={
+                                "Cache-Control": "no-cache",
+                                "Connection": "keep-alive",
+                                "Access-Control-Allow-Origin": "*",
+                                "Access-Control-Allow-Headers": "*",
+                            }
+                        )
+                else:
+                    gemini_response = json.loads(response.body)
+                
                 openai_response = gemini_response_to_openai(gemini_response, request.model)
                 
                 logging.info(f"Successfully processed non-streaming response for model: {request.model}")
                 return openai_response
                 
-            except (json.JSONDecodeError, AttributeError) as e:
+            except (json.JSONDecodeError, AttributeError, Exception) as e:
                 logging.error(f"Failed to parse Gemini response: {str(e)}")
                 return Response(
                     content=json.dumps({

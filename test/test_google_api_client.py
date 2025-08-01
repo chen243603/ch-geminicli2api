@@ -27,13 +27,13 @@ def test_send_request_retries_on_api_failure(mocker, api_client):
     # Mock the response from requests.post
     mock_successful_response = MagicMock(spec=requests.Response)
     mock_successful_response.status_code = 200
-    mock_successful_response.text = 'data: {"response": {"content": "Hi there!"}}'
+    mock_successful_response.text = 'data: {"response": {"content": "Hi there!"}}' 
     mock_successful_response.json.return_value = {"response": {"content": "Hi there!"}}
     mock_successful_response.headers = {"Content-Type": "application/json"}
 
     # Setup the side effect for requests.post: fail twice, succeed on the third attempt
     mock_post = mocker.patch(
-        'requests.post',
+        'src.google_api_client.requests.post',
         side_effect=[
             requests.exceptions.RequestException("Connection error"),
             requests.exceptions.RequestException("Timeout"),
@@ -48,7 +48,8 @@ def test_send_request_retries_on_api_failure(mocker, api_client):
     assert mock_post.call_count == 3
     assert isinstance(response, Response)
     assert response.status_code == 200
-    assert '{"content": "Hi there!"}' in bytes(response.body).decode()
+    response_content = bytes(response.body).decode()
+    assert 'Hi there!' in response_content
 
 def test_send_request_fails_after_exhausting_retries(mocker, api_client):
     """
@@ -65,7 +66,7 @@ def test_send_request_fails_after_exhausting_retries(mocker, api_client):
 
     # Setup requests.post to always fail
     mock_post = mocker.patch(
-        'requests.post',
+        'src.google_api_client.requests.post',
         side_effect=requests.exceptions.RequestException("Persistent connection error")
     )
 
@@ -76,4 +77,5 @@ def test_send_request_fails_after_exhausting_retries(mocker, api_client):
     # Assertions
     assert mock_post.call_count == 3
     assert response.status_code == 500
-    assert "Request failed after retries" in bytes(response.body).decode()
+    response_content = bytes(response.body).decode()
+    assert "Request failed after retries" in response_content

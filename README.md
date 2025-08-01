@@ -36,15 +36,15 @@ A FastAPI-based proxy server that converts the Gemini CLI tool into both OpenAI-
 - `GOOGLE_CLOUD_PROJECT`: Google Cloud project ID
 - `GEMINI_PROJECT_ID`: Alternative project ID variable
 
-### Pseudo Streaming (Optional)
-- `PSEUDO_STREAMING_ENABLED`: Enable pseudo streaming mode (default: false)
-- `PSEUDO_STREAMING_HEARTBEAT_INTERVAL`: Time interval in seconds between heartbeat packets (default: 2.0)
+### Non-Streaming Keepalive (Optional)
+- `NONSTREAM_KEEPALIVE_ENABLED`: Enable non-streaming keepalive mode (default: false)
+- `NONSTREAM_KEEPALIVE_INTERVAL`: Time interval in seconds between keepalive messages (default: 5.0)
 
-When pseudo streaming is enabled, the server will:
-1. Send non-streaming requests to the upstream Gemini API
-2. Send a few heartbeat packets (`data: {}\n\n`) with timing delays to keep the connection alive
-3. Send the complete response as-is without JSON parsing, avoiding parsing errors with malformed responses
-4. This mode is useful for maintaining streaming connections while avoiding complex response parsing issues
+When non-streaming keepalive is enabled, the server will:
+1. Send newline characters (`\n`) at regular intervals during API processing
+2. Prevent connection timeouts for long-running non-streaming requests
+3. Provide real-time feedback that the request is being processed
+4. This is especially useful when using curl or other command-line tools to test the API
 
 ### Example Credentials JSON
 ```json

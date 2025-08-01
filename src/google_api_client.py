@@ -18,10 +18,7 @@ from .config import (
     get_base_model_name,
     is_search_model,
     get_thinking_budget,
-    should_include_thoughts,
-    PSEUDO_STREAMING_ENABLED,
-    PSEUDO_STREAMING_HEARTBEAT_INTERVAL,
-    PSEUDO_STREAMING_MAX_HEARTBEATS
+    should_include_thoughts
 )
 
 class GoogleApiClient:
@@ -73,13 +70,14 @@ class GoogleApiClient:
             "request": payload.get("request", {})
         }
 
-        # Determine the action and URL
-        # In pseudo streaming mode, always use non-streaming endpoint
-        if is_streaming and not PSEUDO_STREAMING_ENABLED:
+        # Determine the action and URL based on the new logic
+        if is_streaming:
+            # For streaming requests, always use true streaming
             action = "streamGenerateContent"
             target_url = f"{CODE_ASSIST_ENDPOINT}/v1internal:{action}?alt=sse"
         else:
-            action = "generateContent"  # Use non-streaming endpoint for pseudo streaming
+            # For non-streaming requests, use non-streaming endpoint
+            action = "generateContent"
             target_url = f"{CODE_ASSIST_ENDPOINT}/v1internal:{action}"
 
         # Build request headers
@@ -94,19 +92,19 @@ class GoogleApiClient:
         # Send the request
         try:
             if is_streaming:
-                logging.info(f"Streaming request - PSEUDO_STREAMING_ENABLED: {PSEUDO_STREAMING_ENABLED}")
-                if PSEUDO_STREAMING_ENABLED:
-                    # In pseudo streaming mode, send heartbeats concurrently while making non-streaming request
-                    logging.info("Using pseudo streaming mode - sending heartbeats concurrently with API request")
-                    return self._handle_concurrent_pseudo_streaming(target_url, final_post_data, request_headers)
-                else:
-                    # Normal streaming mode
-                    logging.info("Using normal streaming mode - sending streaming request")
-                    resp = self._make_request(target_url, final_post_data, request_headers, stream=True)
-                    return self._handle_streaming_response(resp)
+                # For streaming requests, always use true streaming
+                resp = self._make_request(target_url, final_post_data, request_headers, stream=True)
+                return self._handle_streaming_response(resp)
             else:
-                resp = self._make_request(target_url, final_post_data, request_headers)
-                return self._handle_non_streaming_response(resp)
+                # For non-streaming requests, check if keepalive is enabled
+                from .config import NONSTREAM_KEEPALIVE_ENABLED
+                
+                if NONSTREAM_KEEPALIVE_ENABLED:
+                    return self._handle_nonstream_keepalive(target_url, final_post_data, request_headers)
+                else:
+                    # Normal non-streaming mode
+                    resp = self._make_request(target_url, final_post_data, request_headers)
+                    return self._handle_non_streaming_response(resp)
         except requests.exceptions.RequestException as e:
             logging.error(f"Request to Google API failed after retries: {str(e)}")
             return Response(
@@ -122,13 +120,13 @@ class GoogleApiClient:
                 media_type="application/json"
             )
 
-    def _handle_concurrent_pseudo_streaming(self, target_url, final_post_data, request_headers) -> StreamingResponse:
-        """Handle concurrent pseudo-streaming: send heartbeats while making API request."""
-        async def concurrent_stream_generator():
+    def _handle_nonstream_keepalive(self, target_url, final_post_data, request_headers) -> StreamingResponse:
+        """Handle non-streaming request with keepalive: send newlines while making API request."""
+        from .config import NONSTREAM_KEEPALIVE_INTERVAL
+        keepalive_interval = NONSTREAM_KEEPALIVE_INTERVAL
+        
+        async def keepalive_generator():
             try:
-                # Start sending heartbeats immediately
-                stop_heartbeats = asyncio.Event()
-                
                 # Start API request concurrently in a thread pool to avoid blocking
                 async def make_api_request():
                     """Make the actual API request."""
@@ -145,25 +143,28 @@ class GoogleApiClient:
                         logging.error(f"API request failed: {str(e)}")
                         raise
                 
-                # Concurrent execution: send heartbeats while waiting for API response
+                # Start API request
                 api_task = asyncio.create_task(make_api_request())
                 
-                # Send heartbeats while waiting for API response
-                heartbeat_count = 0
-                max_initial_heartbeats = PSEUDO_STREAMING_MAX_HEARTBEATS  # Maximum number of heartbeats to send
-                last_heartbeat_time = time.time()
+                # Send keepalive messages while waiting for API response
+                keepalive_counter = 0
                 
-                while not api_task.done() and heartbeat_count < max_initial_heartbeats:
-                    current_time = time.time()
+                while not api_task.done():
+                    # Wait for the keepalive interval or task completion
+                    done, pending = await asyncio.wait(
+                        [api_task],
+                        timeout=keepalive_interval,
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
                     
-                    # Send heartbeat at configured intervals
-                    if current_time - last_heartbeat_time >= PSEUDO_STREAMING_HEARTBEAT_INTERVAL:
-                        yield "data: {}\n\n".encode('utf-8')
-                        last_heartbeat_time = current_time
-                        heartbeat_count += 1
+                    # If no task completed, send keepalive message
+                    if not done:
+                        keepalive_counter += 1
+                        yield "\n"  # Send newline as keepalive message
+                        continue
                     
-                    # Small delay to prevent busy waiting
-                    await asyncio.sleep(0.1)
+                    # If task completed, break the loop
+                    break
                 
                 # Wait for API response to complete
                 try:
@@ -177,10 +178,8 @@ class GoogleApiClient:
                             "code": 500
                         }
                     }
-                    yield f'data: {json.dumps(error_response, ensure_ascii=False)}\n\n'.encode('utf-8')
+                    yield json.dumps(error_response, ensure_ascii=False)
                     return
-                
-                # Heartbeats are automatically stopped when we exit the loop
                 
                 # Handle API response
                 if resp.status_code != 200:
@@ -196,7 +195,7 @@ class GoogleApiClient:
                                     "code": resp.status_code
                                 }
                             }
-                            yield f'data: {json.dumps(error_response, ensure_ascii=False)}\n\n'.encode('utf-8')
+                            yield json.dumps(error_response, ensure_ascii=False)
                             return
                     except (json.JSONDecodeError, KeyError):
                         pass
@@ -209,18 +208,18 @@ class GoogleApiClient:
                             "code": resp.status_code
                         }
                     }
-                    yield f'data: {json.dumps(error_response, ensure_ascii=False)}\n\n'.encode('utf-8')
+                    yield json.dumps(error_response, ensure_ascii=False)
                     return
                 
                 # Process successful response
-                # Force UTF-8 encoding for proper Chinese text handling
-                if resp.encoding != 'utf-8':
-                    raw_response = resp.content.decode('utf-8').strip()
-                else:
-                    raw_response = resp.text.strip()
-                
-                # Parse the complete response
                 try:
+                    # Force UTF-8 encoding for proper text handling
+                    if resp.encoding != 'utf-8':
+                        raw_response = resp.content.decode('utf-8').strip()
+                    else:
+                        raw_response = resp.text.strip()
+                    
+                    # Parse the complete response
                     parsed_response = json.loads(raw_response)
                     
                     # Check if response has the expected structure
@@ -229,136 +228,21 @@ class GoogleApiClient:
                     else:
                         actual_response = parsed_response
                     
-                    # Convert complete response to streaming chunks for compatibility
-                    if "candidates" in actual_response:
-                        for candidate in actual_response["candidates"]:
-                            if "content" in candidate and "parts" in candidate["content"]:
-                                parts = candidate["content"]["parts"]
-                                
-                                # Send each part as a separate chunk
-                                for i, part in enumerate(parts):
-                                    chunk_candidate = {
-                                        "content": {
-                                            "role": candidate["content"]["role"],
-                                            "parts": [part]
-                                        }
-                                    }
-                                    
-                                    # Add finish reason only to the last chunk
-                                    if i == len(parts) - 1 and "finishReason" in candidate:
-                                        chunk_candidate["finishReason"] = candidate["finishReason"]
-                                    
-                                    # Add safety ratings to the last chunk
-                                    if i == len(parts) - 1 and "safetyRatings" in candidate:
-                                        chunk_candidate["safetyRatings"] = candidate["safetyRatings"]
-                                    
-                                    chunk_response = {"candidates": [chunk_candidate]}
-                                    
-                                    # Add metadata to the last chunk
-                                    if i == len(parts) - 1:
-                                        for key in ["usageMetadata", "modelVersion", "createTime", "responseId"]:
-                                            if key in actual_response:
-                                                chunk_response[key] = actual_response[key]
-                                    
-                                    chunk_json = json.dumps(chunk_response, separators=(',', ':'), ensure_ascii=False)
-                                    yield f"data: {chunk_json}\n\n".encode('utf-8')
-                                    
-                                    # Small delay between chunks
-                                    await asyncio.sleep(0.01)
-                    else:
-                        # Fallback: send as single chunk if no candidates
-                        response_json = json.dumps(actual_response, separators=(',', ':'), ensure_ascii=False)
-                        yield f"data: {response_json}\n\n".encode('utf-8')
+                    response_json = json.dumps(actual_response, ensure_ascii=False)
+                    yield response_json
                     
                 except json.JSONDecodeError as e:
-                    # Fallback: if still receiving streaming format, handle it
-                    lines = raw_response.split('\n')
-                    combined_text = ""
-                    combined_thoughts = ""
-                    final_finish_reason = None
-                    final_safety_ratings = None
-                    final_usage_metadata = None
-                    final_model_version = None
-                    final_create_time = None
-                    final_response_id = None
-                    
-                    # Parse each data: line and collect all content
-                    for i, line in enumerate(lines):
-                        line = line.strip()
-                        if line.startswith('data: '):
-                            try:
-                                json_part = line[6:]
-                                parsed_chunk = json.loads(json_part)
-                                
-                                if "response" in parsed_chunk:
-                                    chunk_response = parsed_chunk["response"]
-                                    
-                                    # Extract content from candidates
-                                    if "candidates" in chunk_response:
-                                        for candidate in chunk_response["candidates"]:
-                                            if "content" in candidate and "parts" in candidate["content"]:
-                                                for part in candidate["content"]["parts"]:
-                                                    if "text" in part:
-                                                        text_content = part["text"]
-                                                        if part.get("thought", False):
-                                                            combined_thoughts += text_content
-                                                        else:
-                                                            combined_text += text_content
-                                            
-                                            # Keep final metadata
-                                            if "finishReason" in candidate:
-                                                final_finish_reason = candidate["finishReason"]
-                                            if "safetyRatings" in candidate:
-                                                final_safety_ratings = candidate["safetyRatings"]
-                                    
-                                    # Keep metadata from the final chunk
-                                    if "usageMetadata" in chunk_response:
-                                        final_usage_metadata = chunk_response["usageMetadata"]
-                                    if "modelVersion" in chunk_response:
-                                        final_model_version = chunk_response["modelVersion"]
-                                    if "createTime" in chunk_response:
-                                        final_create_time = chunk_response["createTime"]
-                                    if "responseId" in chunk_response:
-                                        final_response_id = chunk_response["responseId"]
-                                
-                            except json.JSONDecodeError:
-                                continue
-                    
-                    # Build the final combined response
-                    if combined_text or combined_thoughts:
-                        final_candidate = {
-                            "content": {
-                                "role": "model",
-                                "parts": []
-                            }
+                    error_response = {
+                        "error": {
+                            "message": f"Failed to parse response: {str(e)}",
+                            "type": "parse_error",
+                            "code": 500
                         }
-                        
-                        if combined_text:
-                            final_candidate["content"]["parts"].append({"text": combined_text})
-                        if combined_thoughts:
-                            final_candidate["content"]["parts"].append({"text": combined_thoughts, "thought": True})
-                        
-                        if final_finish_reason:
-                            final_candidate["finishReason"] = final_finish_reason
-                        if final_safety_ratings:
-                            final_candidate["safetyRatings"] = final_safety_ratings
-                        
-                        final_response = {"candidates": [final_candidate]}
-                        
-                        if final_usage_metadata:
-                            final_response["usageMetadata"] = final_usage_metadata
-                        if final_model_version:
-                            final_response["modelVersion"] = final_model_version
-                        if final_create_time:
-                            final_response["createTime"] = final_create_time
-                        if final_response_id:
-                            final_response["responseId"] = final_response_id
-                        
-                        response_json = json.dumps(final_response, separators=(',', ':'), ensure_ascii=False)
-                        yield f"data: {response_json}\n\n".encode('utf-8')
+                    }
+                    yield json.dumps(error_response, ensure_ascii=False)
                 
             except Exception as e:
-                logging.error(f"Unexpected error during concurrent pseudo streaming: {str(e)}")
+                logging.error(f"Unexpected error during non-streaming keepalive: {str(e)}")
                 error_response = {
                     "error": {
                         "message": f"Unexpected error: {str(e)}",
@@ -366,11 +250,11 @@ class GoogleApiClient:
                         "code": 500
                     }
                 }
-                yield f'data: {json.dumps(error_response, ensure_ascii=False)}\n\n'.encode('utf-8')
+                yield json.dumps(error_response, ensure_ascii=False)
         
         return StreamingResponse(
-            content=concurrent_stream_generator(),
-            media_type="text/event-stream",
+            content=keepalive_generator(),
+            media_type="application/json",
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
@@ -378,6 +262,7 @@ class GoogleApiClient:
                 "Access-Control-Allow-Headers": "*",
             }
         )
+
 
     def _handle_streaming_response(self, resp) -> StreamingResponse:
         """Handle streaming response from Google API."""

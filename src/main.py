@@ -1,17 +1,25 @@
 import logging
 import os
+import sys
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 
 # Load environment variables from .env file
 try:
     from dotenv import load_dotenv
     load_dotenv()
-    pass
 except ImportError:
     pass
 except Exception as e:
-    pass
+    logging.warning(f"Error loading environment variables: {e}")
 
 from .gemini_routes import router as gemini_router
 from .openai_routes import router as openai_router
