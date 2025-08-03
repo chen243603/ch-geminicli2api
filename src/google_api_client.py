@@ -18,7 +18,9 @@ from .config import (
     get_base_model_name,
     is_search_model,
     get_thinking_budget,
-    should_include_thoughts
+    should_include_thoughts,
+    is_pseudo_streaming_model,
+    PSEUDO_STREAMING_HEARTBEAT_INTERVAL
 )
 
 class GoogleApiClient:
@@ -71,12 +73,17 @@ class GoogleApiClient:
         }
 
         # Determine the action and URL based on the new logic
-        if is_streaming:
-            # For streaming requests, always use true streaming
+        # Use original model name for pseudo-streaming detection, fallback to base model name
+        original_model = payload.get("original_model", payload.get("model", ""))
+        model_name = payload.get("model", "")
+        use_pseudo_streaming = is_streaming and is_pseudo_streaming_model(original_model)
+        
+        if is_streaming and not use_pseudo_streaming:
+            # For streaming requests with non-pseudo models, use true streaming
             action = "streamGenerateContent"
             target_url = f"{CODE_ASSIST_ENDPOINT}/v1internal:{action}?alt=sse"
         else:
-            # For non-streaming requests, use non-streaming endpoint
+            # For non-streaming requests or pseudo-streaming, use non-streaming endpoint
             action = "generateContent"
             target_url = f"{CODE_ASSIST_ENDPOINT}/v1internal:{action}"
 
@@ -92,9 +99,13 @@ class GoogleApiClient:
         # Send the request
         try:
             if is_streaming:
-                # For streaming requests, always use true streaming
-                resp = self._make_request(target_url, final_post_data, request_headers, stream=True)
-                return self._handle_streaming_response(resp)
+                if use_pseudo_streaming:
+                    # For pseudo-streaming models, use pseudo-streaming mode
+                    return self._handle_pseudo_streaming(target_url, final_post_data, request_headers)
+                else:
+                    # For normal streaming models, use true streaming
+                    resp = self._make_request(target_url, final_post_data, request_headers, stream=True)
+                    return self._handle_streaming_response(resp)
             else:
                 # For non-streaming requests, check if keepalive is enabled
                 from .config import NONSTREAM_KEEPALIVE_ENABLED
@@ -255,6 +266,255 @@ class GoogleApiClient:
         return StreamingResponse(
             content=keepalive_generator(),
             media_type="application/json",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "*",
+            }
+        )
+
+    def _handle_pseudo_streaming(self, target_url, final_post_data, request_headers) -> StreamingResponse:
+        """Handle pseudo-streaming: send heartbeats while making API request, then format response as SSE chunks."""
+        async def pseudo_stream_generator():
+            try:
+                # Start API request concurrently in a thread pool to avoid blocking
+                async def make_api_request():
+                    """Make the actual API request."""
+                    try:
+                        # Run the synchronous _make_request in a thread pool
+                        loop = asyncio.get_event_loop()
+                        resp = await loop.run_in_executor(
+                            None, 
+                            self._make_request, 
+                            target_url, final_post_data, request_headers, False
+                        )
+                        return resp
+                    except Exception as e:
+                        logging.error(f"API request failed: {str(e)}")
+                        raise
+                
+                # Start API request
+                api_task = asyncio.create_task(make_api_request())
+                
+                # Send heartbeats while waiting for API response
+                last_heartbeat_time = time.time()
+                
+                while not api_task.done():
+                    current_time = time.time()
+                    
+                    # Send heartbeat at configured intervals
+                    if current_time - last_heartbeat_time >= PSEUDO_STREAMING_HEARTBEAT_INTERVAL:
+                        yield "data: {}\n\n".encode('utf-8')
+                        last_heartbeat_time = current_time
+                    
+                    # Small delay to prevent busy waiting
+                    await asyncio.sleep(0.1)
+                
+                # Wait for API response to complete
+                try:
+                    resp = await api_task
+                except Exception as e:
+                    # Handle API error
+                    error_response = {
+                        "error": {
+                            "message": f"API request failed: {str(e)}",
+                            "type": "api_error",
+                            "code": 500
+                        }
+                    }
+                    yield f'data: {json.dumps(error_response, ensure_ascii=False)}\n\n'.encode('utf-8')
+                    return
+                
+                # Handle API response
+                if resp.status_code != 200:
+                    # Handle error response
+                    try:
+                        error_data = resp.json()
+                        if "error" in error_data:
+                            error_message = error_data["error"].get("message", f"API error: {resp.status_code}")
+                            error_response = {
+                                "error": {
+                                    "message": error_message,
+                                    "type": "invalid_request_error" if resp.status_code == 404 else "api_error",
+                                    "code": resp.status_code
+                                }
+                            }
+                            yield f'data: {json.dumps(error_response, ensure_ascii=False)}\n\n'.encode('utf-8')
+                            return
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+                    
+                    # Fallback error response
+                    error_response = {
+                        "error": {
+                            "message": f"API error: {resp.status_code}",
+                            "type": "api_error",
+                            "code": resp.status_code
+                        }
+                    }
+                    yield f'data: {json.dumps(error_response, ensure_ascii=False)}\n\n'.encode('utf-8')
+                    return
+                
+                # Process successful response
+                # Force UTF-8 encoding for proper text handling
+                if resp.encoding != 'utf-8':
+                    raw_response = resp.content.decode('utf-8').strip()
+                else:
+                    raw_response = resp.text.strip()
+                
+                # Parse the complete response
+                try:
+                    parsed_response = json.loads(raw_response)
+                    
+                    # Check if response has the expected structure
+                    if "response" in parsed_response:
+                        actual_response = parsed_response["response"]
+                    else:
+                        actual_response = parsed_response
+                    
+                    # Convert complete response to streaming chunks for compatibility
+                    if "candidates" in actual_response:
+                        for candidate in actual_response["candidates"]:
+                            if "content" in candidate and "parts" in candidate["content"]:
+                                parts = candidate["content"]["parts"]
+                                
+                                # Send each part as a separate chunk
+                                for i, part in enumerate(parts):
+                                    chunk_candidate = {
+                                        "content": {
+                                            "role": candidate["content"]["role"],
+                                            "parts": [part]
+                                        }
+                                    }
+                                    
+                                    # Add finish reason only to the last chunk
+                                    if i == len(parts) - 1 and "finishReason" in candidate:
+                                        chunk_candidate["finishReason"] = candidate["finishReason"]
+                                    
+                                    # Add safety ratings to the last chunk
+                                    if i == len(parts) - 1 and "safetyRatings" in candidate:
+                                        chunk_candidate["safetyRatings"] = candidate["safetyRatings"]
+                                    
+                                    chunk_response = {"candidates": [chunk_candidate]}
+                                    
+                                    # Add metadata to the last chunk
+                                    if i == len(parts) - 1:
+                                        for key in ["usageMetadata", "modelVersion", "createTime", "responseId"]:
+                                            if key in actual_response:
+                                                chunk_response[key] = actual_response[key]
+                                    
+                                    chunk_json = json.dumps(chunk_response, separators=(',', ':'), ensure_ascii=False)
+                                    yield f"data: {chunk_json}\n\n".encode('utf-8')
+                                    
+                                    # Small delay between chunks
+                                    await asyncio.sleep(0.01)
+                    else:
+                        # Fallback: send as single chunk if no candidates
+                        response_json = json.dumps(actual_response, separators=(',', ':'), ensure_ascii=False)
+                        yield f"data: {response_json}\n\n".encode('utf-8')
+                    
+                except json.JSONDecodeError as e:
+                    # Fallback: if still receiving streaming format, handle it
+                    lines = raw_response.split('\n')
+                    combined_text = ""
+                    combined_thoughts = ""
+                    final_finish_reason = None
+                    final_safety_ratings = None
+                    final_usage_metadata = None
+                    final_model_version = None
+                    final_create_time = None
+                    final_response_id = None
+                    
+                    # Parse each data: line and collect all content
+                    for i, line in enumerate(lines):
+                        line = line.strip()
+                        if line.startswith('data: '):
+                            try:
+                                json_part = line[6:]
+                                parsed_chunk = json.loads(json_part)
+                                
+                                if "response" in parsed_chunk:
+                                    chunk_response = parsed_chunk["response"]
+                                    
+                                    # Extract content from candidates
+                                    if "candidates" in chunk_response:
+                                        for candidate in chunk_response["candidates"]:
+                                            if "content" in candidate and "parts" in candidate["content"]:
+                                                for part in candidate["content"]["parts"]:
+                                                    if "text" in part:
+                                                        text_content = part["text"]
+                                                        if part.get("thought", False):
+                                                            combined_thoughts += text_content
+                                                        else:
+                                                            combined_text += text_content
+                                            
+                                            # Keep final metadata
+                                            if "finishReason" in candidate:
+                                                final_finish_reason = candidate["finishReason"]
+                                            if "safetyRatings" in candidate:
+                                                final_safety_ratings = candidate["safetyRatings"]
+                                    
+                                    # Keep metadata from the final chunk
+                                    if "usageMetadata" in chunk_response:
+                                        final_usage_metadata = chunk_response["usageMetadata"]
+                                    if "modelVersion" in chunk_response:
+                                        final_model_version = chunk_response["modelVersion"]
+                                    if "createTime" in chunk_response:
+                                        final_create_time = chunk_response["createTime"]
+                                    if "responseId" in chunk_response:
+                                        final_response_id = chunk_response["responseId"]
+                                
+                            except json.JSONDecodeError:
+                                continue
+                    
+                    # Build the final combined response
+                    if combined_text or combined_thoughts:
+                        final_candidate = {
+                            "content": {
+                                "role": "model",
+                                "parts": []
+                            }
+                        }
+                        
+                        if combined_text:
+                            final_candidate["content"]["parts"].append({"text": combined_text})
+                        if combined_thoughts:
+                            final_candidate["content"]["parts"].append({"text": combined_thoughts, "thought": True})
+                        
+                        if final_finish_reason:
+                            final_candidate["finishReason"] = final_finish_reason
+                        if final_safety_ratings:
+                            final_candidate["safetyRatings"] = final_safety_ratings
+                        
+                        final_response = {"candidates": [final_candidate]}
+                        
+                        if final_usage_metadata:
+                            final_response["usageMetadata"] = final_usage_metadata
+                        if final_model_version:
+                            final_response["modelVersion"] = final_model_version
+                        if final_create_time:
+                            final_response["createTime"] = final_create_time
+                        if final_response_id:
+                            final_response["responseId"] = final_response_id
+                        
+                        response_json = json.dumps(final_response, separators=(',', ':'), ensure_ascii=False)
+                        yield f"data: {response_json}\n\n".encode('utf-8')
+                
+            except Exception as e:
+                logging.error(f"Unexpected error during pseudo streaming: {str(e)}")
+                error_response = {
+                    "error": {
+                        "message": f"Unexpected error: {str(e)}",
+                        "type": "api_error",
+                        "code": 500
+                    }
+                }
+                yield f'data: {json.dumps(error_response, ensure_ascii=False)}\n\n'.encode('utf-8')
+        
+        return StreamingResponse(
+            content=pseudo_stream_generator(),
+            media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
@@ -452,6 +712,7 @@ def build_gemini_payload_from_openai(openai_payload: dict) -> dict:
     
     return {
         "model": model,
+        "original_model": openai_payload.get("original_model"),  # Preserve original model for pseudo-streaming detection
         "request": request_data
     }
 
@@ -483,5 +744,6 @@ def build_gemini_payload_from_native(native_request: dict, model_from_path: str)
     
     return {
         "model": get_base_model_name(model_from_path),
+        "original_model": model_from_path,  # Preserve original model for pseudo-streaming detection
         "request": native_request
     }

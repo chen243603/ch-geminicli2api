@@ -35,6 +35,9 @@ GEMINI_AUTH_PASSWORD = os.getenv("GEMINI_AUTH_PASSWORD") or "123456"
 NONSTREAM_KEEPALIVE_ENABLED = os.getenv("NONSTREAM_KEEPALIVE_ENABLED", "false").lower() == "true"
 NONSTREAM_KEEPALIVE_INTERVAL = float(os.getenv("NONSTREAM_KEEPALIVE_INTERVAL", "5.0"))  # seconds between keepalive messages
 
+# Pseudo-streaming Configuration (controlled by model suffix, not env vars)
+PSEUDO_STREAMING_HEARTBEAT_INTERVAL = float(os.getenv("PSEUDO_STREAMING_HEARTBEAT_INTERVAL", "5.0"))  # seconds between heartbeats
+
 
 # Default Safety Settings for Google API
 DEFAULT_SAFETY_SETTINGS = [
@@ -171,6 +174,22 @@ def _generate_thinking_variants():
             thinking_models.append(maxthinking_variant)
     return thinking_models
 
+# Generate pseudo-streaming variants for gemini-2.5 models
+def _generate_pseudo_streaming_variants():
+    """Generate pseudo-streaming variants for gemini-2.5 models."""
+    pseudo_models = []
+    for model in BASE_MODELS:
+        # Only add pseudo-streaming variants for gemini-2.5 models
+        if ("generateContent" in model["supportedGenerationMethods"] and
+            ("gemini-2.5-flash" in model["name"] or "gemini-2.5-pro" in model["name"])):
+            
+            pseudo_variant = model.copy()
+            pseudo_variant["name"] = model["name"] + "-伪流"
+            pseudo_variant["displayName"] = model["displayName"] + " (Pseudo Streaming)"
+            pseudo_variant["description"] = model["description"] + " (uses pseudo-streaming for stream requests)"
+            pseudo_models.append(pseudo_variant)
+    return pseudo_models
+
 # Generate combined variants (search + thinking combinations)
 def _generate_combined_variants():
     """Generate combined search and thinking variants."""
@@ -196,16 +215,16 @@ def _generate_combined_variants():
             combined_models.append(search_maxthinking)
     return combined_models
 
-# Supported Models (includes base models, search variants, and thinking variants)
+# Supported Models (includes base models, search variants, thinking variants, and pseudo-streaming variants)
 # Combine all models and then sort them by name to group variants together
-all_models = BASE_MODELS + _generate_search_variants() + _generate_thinking_variants()
+all_models = BASE_MODELS + _generate_search_variants() + _generate_thinking_variants() + _generate_pseudo_streaming_variants()
 SUPPORTED_MODELS = sorted(all_models, key=lambda x: x['name'])
 
 # Helper function to get base model name from any variant
 def get_base_model_name(model_name):
     """Convert variant model name to base model name."""
     # Remove all possible suffixes in order
-    suffixes = ["-maxthinking", "-nothinking", "-search"]
+    suffixes = ["-maxthinking", "-nothinking", "-search", "-伪流"]
     for suffix in suffixes:
         if model_name.endswith(suffix):
             return model_name[:-len(suffix)]
@@ -225,6 +244,11 @@ def is_nothinking_model(model_name):
 def is_maxthinking_model(model_name):
     """Check if model name indicates maximum thinking budget should be used."""
     return "-maxthinking" in model_name
+
+# Helper function to check if model uses pseudo streaming
+def is_pseudo_streaming_model(model_name):
+    """Check if model name indicates pseudo-streaming should be used for stream requests."""
+    return "-伪流" in model_name
 
 # Helper function to get thinking budget for a model
 def get_thinking_budget(model_name):

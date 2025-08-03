@@ -104,7 +104,8 @@ def openai_request_to_gemini(openai_request: OpenAIChatCompletionRequest) -> Dic
         "contents": contents,
         "generationConfig": generation_config,
         "safetySettings": DEFAULT_SAFETY_SETTINGS,
-        "model": get_base_model_name(openai_request.model)  # Use base model name for API call
+        "model": get_base_model_name(openai_request.model),  # Use base model name for API call
+        "original_model": openai_request.model  # Keep original model name for pseudo-streaming detection
     }
     
     # Add Google Search grounding for search models

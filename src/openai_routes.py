@@ -7,6 +7,7 @@ import json
 import uuid
 import asyncio
 import logging
+import time
 from fastapi import APIRouter, Request, Response, Depends
 from fastapi.responses import StreamingResponse
 
@@ -80,6 +81,20 @@ async def openai_chat_completions(
                                 # Parse the Gemini streaming chunk
                                 chunk_data = chunk[6:]  # Remove 'data: ' prefix
                                 gemini_chunk = json.loads(chunk_data)
+                                
+                                # Allow empty heartbeat chunks for pseudo-streaming keepalive
+                                if not gemini_chunk or gemini_chunk == {}:
+                                    # Transform empty chunk to OpenAI format
+                                    openai_chunk = {
+                                        "id": f"chatcmpl-{str(uuid.uuid4())}",
+                                        "object": "chat.completion.chunk", 
+                                        "created": int(time.time()),
+                                        "model": request.model,
+                                        "choices": [{"index": 0, "delta": {}, "finish_reason": None}]
+                                    }
+                                    yield f"data: {json.dumps(openai_chunk, ensure_ascii=False)}\n\n"
+                                    await asyncio.sleep(0)
+                                    continue
                                 
                                 # Check if this is an error chunk
                                 if "error" in gemini_chunk:
